@@ -1,0 +1,296 @@
+/*
+ * Dim Unfocused Windows - Cinnamon Extension
+ * 
+ * Copyright (C) 2025
+ * 
+ * This extension dims windows when they lose focus to enhance visual clarity
+ * and reduce distractions, making it easier to identify the active window.
+ */
+
+const UUID = "devtest-dim-unfocused-windows@retiarylime";
+
+const Clutter = imports.gi.Clutter;
+const Meta = imports.gi.Meta;
+const Settings = imports.ui.settings;
+const Main = imports.ui.main;
+const Tweener = imports.ui.tweener;
+const SignalManager = imports.misc.signalManager;
+const Gettext = imports.gettext;
+const GLib = imports.gi.GLib;
+const Mainloop = imports.mainloop;
+
+// Global variables
+let extension = null;
+
+function _(str) {
+    let customTranslation = Gettext.dgettext(UUID, str);
+    if(customTranslation !== str) {
+        return customTranslation;
+    }
+    return Gettext.gettext(str);
+}
+
+/**
+ * Main extension class that handles window dimming functionality
+ */
+function DimUnfocusedWindowsExtension() {
+    this._init();
+}
+
+DimUnfocusedWindowsExtension.prototype = {
+    _init: function() {
+        this._signals = new SignalManager.SignalManager(null);
+        this._windowStates = new Map();
+        this._activeWindow = null;
+        
+        // Set default values first
+        this.baseOpacity = 100;
+        this.dimAmount = 30;
+        this.enableAnimation = true;
+        this.animationTime = 300;
+        this.animationType = "easeInOutQuad";
+        this.dimMinimized = false;
+        this.excludeDialogs = true;
+        
+        // Settings - try to bind with error handling
+        try {
+            this.settings = new Settings.ExtensionSettings(this, UUID);
+            this.settings.bind("base-opacity", "baseOpacity", this._onSettingsChanged);
+            this.settings.bind("dim-amount", "dimAmount", this._onSettingsChanged);
+            this.settings.bind("enable-animation", "enableAnimation", this._onSettingsChanged);
+            this.settings.bind("animation-time", "animationTime", this._onSettingsChanged);
+            this.settings.bind("animation-type", "animationType", this._onSettingsChanged);
+            this.settings.bind("dim-minimized", "dimMinimized", this._onSettingsChanged);
+            this.settings.bind("exclude-dialogs", "excludeDialogs", this._onSettingsChanged);
+        } catch (e) {
+            global.log("[" + UUID + "] Settings binding failed, using defaults: " + e);
+        }
+        
+        global.log("[" + UUID + "] Extension initialized with base opacity: " + this.baseOpacity + "%, dim amount: " + this.dimAmount + "%");
+    },
+    
+    enable: function() {
+        global.log("[" + UUID + "] Enabling extension");
+        
+        // Connect to window focus events
+        this._signals.connect(global.display, 'notify::focus-window', 
+                             this._onFocusChanged, this);
+        
+        // Connect to window creation events
+        this._signals.connect(global.window_manager, 'map', this._onWindowMapped, this);
+        
+        // Process existing windows
+        this._dimUnfocusedWindows();
+    },
+    
+    disable: function() {
+        global.log("[" + UUID + "] Disabling extension");
+        
+        // Restore all windows to normal opacity
+        this._restoreAllWindows();
+        
+        // Disconnect all signals
+        if (this._signals) {
+            this._signals.disconnectAllSignals();
+        }
+        
+        // Clean up
+        this._windowStates.clear();
+        this._activeWindow = null;
+        
+        if (this.settings) {
+            this.settings.finalize();
+            this.settings = null;
+        }
+    },
+    
+    _onSettingsChanged: function() {
+        global.log("[" + UUID + "] Settings changed - base opacity: " + this.baseOpacity + "%, dim amount: " + this.dimAmount + "%");
+        // Reapply dimming with new settings
+        if (this._activeWindow) {
+            this._dimUnfocusedWindows();
+        }
+    },
+    
+    _onFocusChanged: function() {
+        let focusedWindow = global.display.get_focus_window();
+        
+        if (focusedWindow === this._activeWindow) {
+            return; // No change
+        }
+        
+        global.log("[" + UUID + "] Focus changed to: " + (focusedWindow ? focusedWindow.get_title() : "null"));
+        this._activeWindow = focusedWindow;
+        this._dimUnfocusedWindows();
+    },
+    
+    _onWindowMapped: function(shellwm, actor) {
+        // Track new windows
+        let window = actor.get_meta_window();
+        if (window) {
+            this._trackWindow(window);
+            
+            // Apply dimming if this window shouldn't be focused
+            if (window !== this._activeWindow && this._shouldDimWindow(window)) {
+                // Small delay to let the window settle
+                Mainloop.timeout_add(100, () => {
+                    this._dimWindow(window);
+                    return false;
+                });
+            }
+        }
+    },
+    
+    _dimUnfocusedWindows: function() {
+        let windows = global.get_window_actors();
+        let restoredCount = 0;
+        let dimmedCount = 0;
+        
+        // First explicitly restore the focused window
+        if (this._activeWindow) {
+            this._restoreWindow(this._activeWindow);
+            restoredCount++;
+            global.log("[" + UUID + "] Explicitly restored focused window: " + this._activeWindow.get_title());
+        }
+        
+        // Then process all unfocused windows
+        for (let windowActor of windows) {
+            let window = windowActor.get_meta_window();
+            if (!window || window === this._activeWindow) continue;
+            
+            if (this._shouldDimWindow(window)) {
+                this._dimWindow(window);
+                dimmedCount++;
+            }
+        }
+        
+        global.log("[" + UUID + "] Restored " + restoredCount + " focused window, dimmed " + dimmedCount + " unfocused windows");
+    },
+    
+    _dimWindow: function(window) {
+        let actor = window.get_compositor_private();
+        if (!actor) return;
+        
+        let state = this._windowStates.get(window);
+        if (!state) {
+            this._trackWindow(window);
+            state = this._windowStates.get(window);
+        }
+        
+        if (state && !state.isDimmed) {
+            let finalOpacity = Math.max(5, this.baseOpacity - this.dimAmount);
+            let targetOpacity = Math.round(255 * (finalOpacity / 100));
+            let windowTitle = window.get_title().substring(0, 30) + "...";
+            
+            global.log("[" + UUID + "] Dimming '" + windowTitle + "' from " + actor.opacity + " to " + targetOpacity);
+            
+            if (this.enableAnimation) {
+                // Use smooth animation
+                Tweener.addTween(actor, {
+                    opacity: targetOpacity,
+                    time: this.animationTime / 1000,
+                    transition: this.animationType || 'easeInOutQuad',
+                    onComplete: () => {
+                        state.isDimmed = true;
+                    }
+                });
+            } else {
+                // Immediate opacity change
+                actor.opacity = targetOpacity;
+                state.isDimmed = true;
+            }
+        }
+    },
+    
+    _restoreWindow: function(window) {
+        let actor = window.get_compositor_private();
+        if (!actor) return;
+        
+        let state = this._windowStates.get(window);
+        if (!state) {
+            this._trackWindow(window);
+            state = this._windowStates.get(window);
+        }
+        
+        let windowTitle = window.get_title().substring(0, 30) + "...";
+        let targetOpacity = Math.round(255 * (this.baseOpacity / 100));
+        global.log("[" + UUID + "] Restoring '" + windowTitle + "' from " + actor.opacity + " to " + targetOpacity);
+        
+        if (this.enableAnimation) {
+            // Use smooth animation
+            Tweener.addTween(actor, {
+                opacity: targetOpacity,
+                time: this.animationTime / 1000,
+                transition: this.animationType || 'easeInOutQuad',
+                onComplete: () => {
+                    if (state) {
+                        state.isDimmed = false;
+                    }
+                }
+            });
+        } else {
+            // Immediate opacity change
+            actor.opacity = targetOpacity;
+            if (state) {
+                state.isDimmed = false;
+            }
+        }
+    },
+    
+    _restoreAllWindows: function() {
+        for (let [window, state] of this._windowStates) {
+            if (state.isDimmed) {
+                let actor = window.get_compositor_private();
+                if (actor) {
+                    actor.opacity = Math.round(255 * (this.baseOpacity / 100));
+                }
+            }
+        }
+    },
+    
+    _trackWindow: function(window) {
+        if (!this._windowStates.has(window)) {
+            this._windowStates.set(window, {
+                isDimmed: false
+            });
+        }
+    },
+    
+    _shouldDimWindow: function(window) {
+        if (!window) return false;
+        
+        // Skip minimized windows unless enabled
+        if (window.is_minimized() && !this.dimMinimized) {
+            return false;
+        }
+        
+        // Skip dialog windows if enabled
+        if (this.excludeDialogs) {
+            let windowType = window.get_window_type();
+            if (windowType === Meta.WindowType.DIALOG ||
+                windowType === Meta.WindowType.MODAL_DIALOG) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+};
+
+function init() {
+    return new DimUnfocusedWindowsExtension();
+}
+
+function enable() {
+    if (!extension) {
+        extension = init();
+    }
+    extension.enable();
+}
+
+function disable() {
+    if (extension) {
+        extension.disable();
+        extension = null;
+    }
+}
