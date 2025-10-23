@@ -26,7 +26,7 @@
 
     "section-animation": {
         "type": "section",
-        "description": "Opacity Animation Settings"
+        "description": "Animation Settings"
     },
 
     "animation-time": {
@@ -37,7 +37,7 @@
         "default": 300,
         "step": 50,
         "units": "ms",
-        "tooltip": "Time it takes for the opacity animation to complete"
+        "tooltip": "Time it takes for the dimming animation to complete"
     },
 
     "animation-type": {
@@ -52,7 +52,7 @@
             "Ease In Out Cubic": "easeInOutCubic",
             "Ease Out Cubic": "easeOutCubic"
         },
-        "tooltip": "Choose the animation curve for the opacity effect"
+        "tooltip": "Choose the animation curve for the dimming effects"
     },
 
     "section-advanced": {
@@ -65,6 +65,20 @@
         "description": "Exclude dialog windows",
         "default": true,
         "tooltip": "Don't dim dialog windows (like file choosers, preferences windows, etc.)"
+    },
+
+    "disable-dim-minimized": {
+        "type": "checkbox",
+        "description": "Disable dimming for minimized windows",
+        "default": true,
+        "tooltip": "Don't dim windows that are minimized to the taskbar"
+    },
+
+    "exclude-window-titles": {
+        "type": "entry",
+        "description": "Exclude windows with titles containing",
+        "default": "Picture in picture",
+        "tooltip": "Comma-separated list of text patterns in window titles to exclude from dimming (case-sensitive)"
     },
 
     "toggle-keybinding": {

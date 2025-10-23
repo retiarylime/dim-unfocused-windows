@@ -90,7 +90,7 @@ msgid "Ease Out Cubic"
 msgstr ""
 
 #. settings-schema.json->animation-type->tooltip
-msgid "Choose the animation curve for the dimming effect"
+msgid "Choose the animation curve for the opacity and brightness effects"
 msgstr ""
 
 #. settings-schema.json->section-advanced->description
@@ -104,6 +104,22 @@ msgstr ""
 #. settings-schema.json->exclude-dialogs->tooltip
 msgid ""
 "Don't dim dialog windows (like file choosers, preferences windows, etc.)"
+msgstr ""
+
+#. settings-schema.json->disable-dim-minimized->description
+msgid "Disable dimming for minimized windows"
+msgstr ""
+
+#. settings-schema.json->disable-dim-minimized->tooltip
+msgid "Don't dim windows that are minimized to the taskbar"
+msgstr ""
+
+#. settings-schema.json->exclude-window-titles->description
+msgid "Exclude windows with titles containing"
+msgstr ""
+
+#. settings-schema.json->exclude-window-titles->tooltip
+msgid "Comma-separated list of text patterns in window titles to exclude from dimming (case-sensitive)"
 msgstr ""
 
 #. settings-schema.json->toggle-keybinding->description
