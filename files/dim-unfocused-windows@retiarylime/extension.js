@@ -31,6 +31,8 @@ DimUnfocusedWindowsExtension.prototype = {
         this.animationTime = 300;
         this.animationType = "easeInOutQuad";
         this.excludeDialogs = true;
+        this.disableDimMinimized = true;
+        this.excludeWindowTitles = "Picture in picture";
         this.toggleKeybinding = "<Super><Shift>d";
         this.dimmingEnabled = true;
         
@@ -42,12 +44,14 @@ DimUnfocusedWindowsExtension.prototype = {
             this.settings.bind("animation-time", "animationTime", this._onSettingsChanged);
             this.settings.bind("animation-type", "animationType", this._onSettingsChanged);
             this.settings.bind("exclude-dialogs", "excludeDialogs", this._onSettingsChanged);
+            this.settings.bind("disable-dim-minimized", "disableDimMinimized", this._onSettingsChanged);
+            this.settings.bind("exclude-window-titles", "excludeWindowTitles", this._onSettingsChanged);
             this.settings.bind("toggle-keybinding", "toggleKeybinding", this._onKeybindingChanged);
         } catch (e) {
             global.log("[" + UUID + "] Settings binding failed, using defaults: " + e);
         }
         
-        global.log("[" + UUID + "] Extension initialized with opacity: " + this.opacity + "%, brightness: " + this.brightness + "%");
+        global.log("[" + UUID + "] Extension initialized with opacity: " + this.opacity + "%, brightness: " + this.brightness + "%, exclude dialogs: " + this.excludeDialogs + ", disable dim minimized: " + this.disableDimMinimized + ", exclude titles: '" + this.excludeWindowTitles + "'");
     },
     
     enable: function() {
@@ -97,7 +101,7 @@ DimUnfocusedWindowsExtension.prototype = {
     },
     
         _onSettingsChanged: function() {
-        global.log("[" + UUID + "] Settings changed - opacity: " + this.opacity + "%, brightness: " + this.brightness + "%, animation: " + this.animationTime + "ms");
+        global.log("[" + UUID + "] Settings changed - opacity: " + this.opacity + "%, brightness: " + this.brightness + "%, animation: " + this.animationTime + "ms, exclude dialogs: " + this.excludeDialogs + ", disable dim minimized: " + this.disableDimMinimized + ", exclude titles: '" + this.excludeWindowTitles + "'");
         
         // Update focused window to full brightness/opacity
         if (this._activeWindow) {
@@ -150,24 +154,78 @@ DimUnfocusedWindowsExtension.prototype = {
         }
         
         // Create new brightness effect: 0% = -1.0 (completely dark), 100% = 0.0 (normal brightness)
-        let brightness = (this.brightness - 100) / 100.0; // Convert 0-100% to -1.0 to 0.0
+        let targetBrightness = (this.brightness - 100) / 100.0; // Convert 0-100% to -1.0 to 0.0
         state.brightnessEffect = new Clutter.BrightnessContrastEffect();
-        state.brightnessEffect.set_brightness(brightness);
+        state.brightnessEffect.set_brightness(targetBrightness);
         state.brightnessEffect.set_contrast(0.0); // Keep contrast normal
         
         actor.add_effect(state.brightnessEffect);
         
         if (animate) {
+            // Animate both opacity and brightness
             Tweener.addTween(actor, {
                 opacity: targetOpacity,
                 time: this.animationTime / 1000,
                 transition: this.animationType
             });
+            
+            // Animate brightness effect
+            this._animateBrightness(actor, state.brightnessEffect, targetBrightness, this.animationTime);
         } else {
             actor.opacity = targetOpacity;
+            // Brightness is already set above
         }
         
-        global.log("[" + UUID + "] Applied dimming to '" + windowTitle + "' (opacity: " + targetOpacity + ", brightness: " + brightness + ")");
+        global.log("[" + UUID + "] Applied dimming to '" + windowTitle + "' (opacity: " + targetOpacity + ", brightness: " + targetBrightness + ")");
+    },
+    
+    _animateBrightness: function(actor, brightnessEffect, targetBrightness, duration) {
+        // Get the current brightness value (assuming it starts from 0.0 for full brightness)
+        let startBrightness = 0.0; // Full brightness
+        let startTime = Date.now();
+        
+        let animate = () => {
+            let elapsed = Date.now() - startTime;
+            let progress = Math.min(elapsed / duration, 1.0);
+            
+            // Apply easing function based on animation type
+            let easedProgress = this._applyEasing(progress, this.animationType);
+            
+            // Interpolate between start and target brightness
+            let currentBrightness = startBrightness + (targetBrightness - startBrightness) * easedProgress;
+            
+            brightnessEffect.set_brightness(currentBrightness);
+            
+            if (progress < 1.0) {
+                // Continue animation
+                setTimeout(animate, 16); // ~60fps
+            }
+        };
+        
+        animate();
+    },
+    
+    _applyEasing: function(t, easingType) {
+        // Apply the same easing functions as Tweener
+        switch (easingType) {
+            case 'linear':
+                return t;
+            case 'easeInQuad':
+                return t * t;
+            case 'easeOutQuad':
+                return t * (2 - t);
+            case 'easeInOutQuad':
+                return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+            case 'easeInCubic':
+                return t * t * t;
+            case 'easeOutCubic':
+                let t1 = t - 1;
+                return t1 * t1 * t1 + 1;
+            case 'easeInOutCubic':
+                return t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+            default:
+                return t; // Default to linear
+        }
     },
     
     _onKeybindingChanged: function() {
@@ -321,7 +379,7 @@ DimUnfocusedWindowsExtension.prototype = {
             state.brightnessEffect = null;
         }
         
-        // Ensure full opacity
+        // Ensure full opacity and brightness
         Tweener.addTween(actor, {
             opacity: 255,
             time: this.animationTime / 1000,
@@ -353,6 +411,22 @@ DimUnfocusedWindowsExtension.prototype = {
     
     _shouldDimWindow: function(window) {
         if (!window || window.is_skip_taskbar()) return false;
+        
+        // Don't dim minimized windows if the setting is enabled
+        if (this.disableDimMinimized && window.minimized) {
+            return false;
+        }
+        
+        // Don't dim windows with excluded titles
+        if (this.excludeWindowTitles && this.excludeWindowTitles.trim() !== "") {
+            let windowTitle = window.get_title();
+            let patterns = this.excludeWindowTitles.split(',').map(p => p.trim());
+            for (let pattern of patterns) {
+                if (pattern && windowTitle.includes(pattern)) {
+                    return false;
+                }
+            }
+        }
         
         let windowType = window.window_type;
         
